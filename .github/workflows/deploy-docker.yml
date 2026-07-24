@@ -4,26 +4,50 @@ on:
   push:
     branches:
       - main
-  workflow_dispatch:
     paths:
       - '**/docker-compose.yml'
+      - '**/*.env'
+  workflow_dispatch: 
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Deploy via SSH
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 
+
+      - name: Get Changed Directories
+        id: changed-dirs
+        uses: tj-actions/changed-files@v44
+        with:
+          dir_names: true
+          dir_names_max_depth: 3
+          files: |
+            **/docker-compose.yml
+            **/*.env
+
+      - name: Deploy Modified Services via SSH
+        if: steps.changed-dirs.outputs.any_changed == 'true'
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.SERVER_HOST }}
           username: ${{ secrets.SERVER_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script_stop_on_error: true
+          envs: CHANGED_DIRS
           script: |
             cd /home/deploy/Homelab
-
-            # Pull latest changes
             git pull origin main
 
-            # Rebuild and restart Docker containers
-            docker compose up -d --build --remove-orphans
+            # CHANGED_DIRS arrives as a space-separated list (e.g. "apps/plex apps/nginx")
+            for dir in $CHANGED_DIRS; do
+              if [ -f "$dir/docker-compose.yml" ]; then
+                echo "🚀 Deploying changes in: $dir"
+                (cd "$dir" && docker compose up -d --build --remove-orphans)
+              fi
+            done
+        env:
+          CHANGED_DIRS: ${{ steps.changed-dirs.outputs.all_changed_and_modified_files }}
